@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>R08 Cell Twin</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<nav class="nav"><a href="index.html">← Paper model</a><span class="note">Our lab cell</span></nav>
+<h1>One real cell, R08: the same method on our own device</h1>
+<p class="sub">The paper's autoencoder, retrained on our own drift-diffusion simulations (OghmaNano) of a wide-bandgap perovskite cell, and compared with its one measured J–V curve. Measured in Prof. Fang-Chung Chen's lab (NYCU) and shared with permission.</p>
+
+<div class="facts">
+ <div class="fact"><b>1.82 eV</b><span>band gap, p-i-n</span></div>
+ <div class="fact"><b>1.299 V</b><span>Voc</span></div>
+ <div class="fact"><b>14.11</b><span>Jsc (mA/cm²)</span></div>
+ <div class="fact"><b>78.2%</b><span>FF</span></div>
+ <div class="fact"><b>14.34%</b><span>PCE</span></div>
+</div>
+<p class="note" id="stack" style="margin-top:-6px"></p>
+
+<div class="grid">
+ <section class="card">
+  <p class="note" style="margin-top:0">Move a slider: <b>our decoder</b> redraws R08's curve. The number below is its distance to the measurement.</p>
+  <div>RMS to the measured curve: <span class="rms" id="rms">–</span></div>
+  <p class="note" id="rms-note" style="margin:2px 0 10px"></p>
+  <div class="presets">
+   <button class="btn" id="b-enc">Encoder estimate</button>
+   <button class="btn" id="b-fit">Decoder fit</button>
+   <button class="btn" id="b-etl">Solver fit (ETL)</button>
+   <button class="btn" id="b-mid">Mid-range</button>
+  </div>
+  <p class="warn" id="warn" hidden></p>
+  <div id="sliders"></div>
+  <div class="status" id="status">Downloading our networks (bars above the chart)…</div>
+ </section>
+ <section class="card">
+  <div class="dl" id="dl" aria-live="polite">
+   <div class="dl-row" id="dl-decoder"><b>Simulator (decoder)</b><span class="t">waiting…</span><div class="bar"><span></span></div></div>
+   <div class="dl-row" id="dl-encoder"><b>Estimator (encoder)</b><span class="t">waiting…</span><div class="bar"><span></span></div></div>
+  </div>
+  <div class="chart"><canvas id="chart"></canvas></div>
+  <div class="fits" id="fits"></div>
+  <p class="note">Black points: measured. Blue line: our decoder at the slider values. Dashed: full solver simulations (not the network), shown for reference.</p>
+ </section>
+</div>
+
+<section class="card note" style="margin-top:16px">
+ <b>How to read this.</b>
+ <ul style="margin:6px 0 0;padding-left:20px">
+  <li><b>One curve cannot decide.</b> Several parameter sets fit it about equally well. Two solver fits that put the recombination at different interfaces differ by only 0.03 mA/cm² RMS within one assumed model. Measurements at several light intensities would separate them.</li>
+  <li><b>The network has no HTL-side traps.</b> It was trained before we found that HTL-side traps fit better, so its sliders cannot reach the HTL solver fit. A retrained model is in progress.</li>
+  <li><b>The decoder has its own error</b> (<span id="mae"></span> mA/cm² on average on unseen simulated devices). So a decoder curve that looks close is not proof: the decoder fit's parameters give a larger RMS when re-simulated in the solver (dashed line).</li>
+  <li><b>The encoder leaves the training range</b> on the measured curve (shunt resistance far above the range). We read that as a sign that the model is missing something, not as a measurement.</li>
+  <li><b>Calibration:</b> a light-loss factor of 0.845 matches Jsc for the missing glass and generic optical data, so Jsc is not evidence, and optical errors can pass into τ and μ.</li>
+ </ul>
+ <p style="margin:10px 0 0"><b>The model.</b> The paper's architecture, trained on <span id="ntrain"></span> simulated R08 devices (six parameters, log-uniform). Held-out test R²: <span id="r2"></span>. Weights are float16 for the web. Rs and Rsh are in Ω·cm²; τ comes from the bulk trap density, τ = 1/(σ v_th N_t) with σ v_th = 10⁻¹⁴ m³/s.</p>
+</section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+<script src="model/r08_data.js"></script>
+<script>
+"use strict";
+ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
+const D = R08.data, $ = id => document.getElementById(id);
+const V = D.voltages, N = D.params.length;
+// SI values from the simulator -> the units we report
+const SHOW = {
+  tau: {name: "SRH lifetime τ", unit: "ns", f: v => 1e9 / (1e-14 * v)},
+  mu: {name: "Mobility μ (e = h)", unit: "cm²/Vs", f: v => v * 1e4},
+  rho_ion: {name: "Ion density ρ_ion", unit: "cm⁻³", f: v => v * 1e-6},
+  S: {name: "ETL interface trap density", unit: "m⁻²", f: v => v},
+  Rs: {name: "Series resistance Rs", unit: "Ω·cm²", f: v => v * 0.06},
+  Rsh: {name: "Shunt resistance Rsh", unit: "Ω·cm²", f: v => v * 1e4}
+};
+const FIT_COLORS = ["#ff7f0e", "#2ca02c", "#9467bd"];
+let dec, enc, chart, busy = false, pending = false;
+
+function si(i, u) { return Math.pow(10, D.log10_min[i] + u * (D.log10_max[i] - D.log10_min[i])); }
+function fmt(v) {
+  const e = Math.floor(Math.log10(Math.abs(v)));
+  if (e >= -2 && e <= 3) { const s = v.toPrecision(3); return s.includes(".") ? s.replace(/\.?0+$/, "") : s; }
+  return (v / Math.pow(10, e)).toFixed(2) + "e" + e;
+}
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const [j0, j1] = D.J_range_mA_cm2;
+const measOnV = V.map(v => { const m = D.measured; let k = m.V.findIndex(x => x >= v); if (k <= 0) return m.J[0];
+  const t = (v - m.V[k - 1]) / (m.V[k] - m.V[k - 1]); return m.J[k - 1] + t * (m.J[k] - m.J[k - 1]); });
+
+function rms(J) {
+  let s = 0, n = 0;
+  V.forEach((v, i) => { if (v >= D.fit_from_V && v <= D.fit_to_V) { s += (J[i] - measOnV[i]) ** 2; n++; } });
+  return Math.sqrt(s / n);
+}
+
+function makeChart() {
+  const grid = css("--line"), ink = css("--muted");
+  const ds = [
+    {label: "measured", data: D.measured.V.map((v, i) => ({x: v, y: D.measured.J[i]})), showLine: false, pointRadius: 2.5,
+     backgroundColor: css("--ink"), borderColor: css("--ink")},
+    {label: "decoder", data: [], borderColor: "#1f77b4", borderWidth: 2.5, pointRadius: 0}
+  ];
+  D.fits.forEach((f, i) => ds.push({label: f.label, data: f.V.map((v, k) => ({x: v, y: f.J[k]})), borderColor: FIT_COLORS[i],
+    borderWidth: 1.6, borderDash: [6, 4], pointRadius: 0, hidden: i !== 1}));
+  chart = new Chart($("chart"), {
+    type: "line", data: {datasets: ds},
+    options: {animation: false, maintainAspectRatio: false, parsing: false,
+      scales: {x: {type: "linear", min: -0.2, max: 1.4, title: {display: true, text: "Voltage (V)", color: ink}, grid: {color: grid}, ticks: {color: ink}},
+               y: {min: -16, max: 10, title: {display: true, text: "Current density (mA/cm²)", color: ink}, grid: {color: grid}, ticks: {color: ink}}},
+      plugins: {legend: {display: false}, tooltip: {enabled: false}}}
+  });
+  D.fits.forEach((f, i) => {
+    const l = document.createElement("label");
+    l.innerHTML = `<input type="checkbox" ${i === 1 ? "checked" : ""}> <span style="color:${FIT_COLORS[i]}">- -</span> ${f.label}, RMS ${f.rms.toFixed(2)}`;
+    l.querySelector("input").onchange = e => { chart.data.datasets[2 + i].hidden = !e.target.checked; chart.update(); };
+    $("fits").appendChild(l);
+  });
+}
+
+function values() { return D.params.map((_, i) => +$("s" + i).value); }
+async function simulate() {
+  if (!dec) return;
+  if (busy) { pending = true; return; }
+  busy = true;
+  const t0 = performance.now();
+  const x = (await dec.run({y: new ort.Tensor("float32", Float32Array.from(values()), [1, N])})).x.data;
+  const J = Array.from(x, v => j0 + v * (j1 - j0));
+  chart.data.datasets[1].data = V.map((v, i) => ({x: v, y: J[i]}));
+  chart.update();
+  $("rms").textContent = rms(J).toFixed(3) + " mA/cm²";
+  $("status").textContent = "Decoder: " + (performance.now() - t0).toFixed(0) + " ms per curve.";
+  busy = false;
+  if (pending) { pending = false; simulate(); }
+}
+
+function setSliders(u, warnOut) {
+  const out = [];
+  u.forEach((x, i) => {
+    if (x > 1.001 || x < -0.001) out.push(`${SHOW[D.params[i]].name}: ${fmt(SHOW[D.params[i]].f(si(i, x)))} ${SHOW[D.params[i]].unit}`);
+    $("s" + i).value = Math.min(Math.max(x, 0), 1);
+    $("o" + i).textContent = label(i);
+  });
+  $("warn").hidden = !(warnOut && out.length);
+  if (warnOut && out.length) $("warn").textContent = "Outside the training range (slider set to the edge): " + out.join("; ") + ".";
+  simulate();
+}
+function label(i) { const s = SHOW[D.params[i]]; return fmt(s.f(si(i, +$("s" + i).value))) + " " + s.unit; }
+
+function buildSliders() {
+  D.params.forEach((p, i) => {
+    const d = document.createElement("div");
+    d.className = "param";
+    d.innerHTML = `<label for="s${i}"><span>${SHOW[p].name}</span><output id="o${i}"></output></label>
+      <input type="range" id="s${i}" min="0" max="1" step="0.005" value="0.5">`;
+    $("sliders").appendChild(d);
+    $("s" + i).addEventListener("input", () => { $("o" + i).textContent = label(i); $("warn").hidden = true; simulate(); });
+    $("o" + i).textContent = label(i);
+  });
+}
+
+// download panel (same approach as the paper page; each network is one script file)
+function row(name) {
+  const r = $("dl-" + name);
+  return {
+    set(done, total) { r.querySelector(".bar span").style.width = Math.min(100, 100 * done / total).toFixed(1) + "%";
+      r.querySelector(".t").textContent = `${(done / 1e6).toFixed(1)} / ${(total / 1e6).toFixed(1)} MB`; },
+    busy(t) { r.querySelector(".bar").classList.add("busy"); r.querySelector(".t").textContent = t; },
+    ok() { r.classList.add("ok"); r.querySelector(".bar").classList.remove("busy"); r.querySelector(".t").textContent = "ready"; },
+    fail(t) { r.querySelector(".bar").classList.remove("busy"); r.querySelector(".t").textContent = t; }
+  };
+}
+function addScript(src) {
+  return new Promise((ok, fail) => { const s = document.createElement("script"); s.src = src; s.onload = ok;
+    s.onerror = () => fail(new Error("missing " + src)); document.head.appendChild(s); });
+}
+async function loadModel(name) {
+  const ui = row(name), src = `model/r08_${name}_0.js`, total = D.sizes[name];
+  let b64;
+  if (location.protocol.startsWith("http")) {
+    const r = await fetch(src);
+    if (!r.ok) throw new Error("missing " + src);
+    const reader = r.body.getReader(), chunks = [];
+    let done = 0;
+    for (;;) { const c = await reader.read(); if (c.done) break; chunks.push(c.value); done += c.value.length; ui.set(done, total); }
+    const t = await new Blob(chunks).text();
+    b64 = t.slice(t.indexOf('= "') + 3, t.lastIndexOf('"'));
+  } else {
+    ui.busy("loading file…");
+    await addScript(src);
+    b64 = R08[name]; R08[name] = null;
+  }
+  ui.busy("preparing…");
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const s = await ort.InferenceSession.create(bytes);
+  ui.ok();
+  return s;
+}
+function allReady() { if (dec && enc) setTimeout(() => { $("dl").hidden = true; }, 1500); }
+
+async function encoderEstimate() {
+  const x = Float32Array.from(measOnV, j => (Math.min(Math.max(j, j0), j1) - j0) / (j1 - j0));
+  const y = (await enc.run({x: new ort.Tensor("float32", x, [1, V.length])})).y.data;
+  setSliders(Array.from(y), true);
+  $("status").textContent = "Encoder estimate from the measured curve.";
+}
+
+(async () => {
+  try {
+    $("stack").textContent = "Stack: " + D.device.stack + ". Data: " + D.device.scan + ".";
+    $("rms-note").textContent = `mA/cm², from ${D.fit_from_V} V to Voc (${D.fit_to_V} V); the first points dip at the start of the scan.`;
+    const c = D.model_check;
+    $("mae").textContent = c.decoder_MAE_mA_cm2.toFixed(2);
+    $("ntrain").textContent = c.training_devices.toLocaleString("en");
+    $("r2").textContent = D.params.map(p => (p === "S" ? "ETL traps" : p) + " " + c.param_R2[p].toFixed(2)).join(", ").replace("rho_ion", "ρ_ion").replace("tau", "τ").replace("mu", "μ");
+    buildSliders(); makeChart();
+    $("b-mid").onclick = () => setSliders(D.params.map(() => 0.5), false);
+    $("b-fit").onclick = () => { setSliders(D.presets["Decoder fit (64 starts)"], false); $("status").textContent = "Best decoder fit of the measured curve (64 random starts)."; };
+    $("b-etl").onclick = () => { setSliders(D.presets["Solver fit, ETL traps"], true); $("status").textContent = "Parameters of the ETL solver fit, run through the decoder."; };
+    $("b-enc").onclick = () => { if (enc) encoderEstimate(); else $("status").textContent = "The estimator is still downloading."; };
+    const decP = loadModel("decoder").then(s => { dec = s; allReady(); simulate(); });
+    const encP = loadModel("encoder").then(s => { enc = s; allReady(); });
+    encP.catch(e => row("encoder").fail("failed: " + e.message));
+    await decP;
+  } catch (err) {
+    $("status").textContent = "Could not start: " + err.message + " (the page needs an internet connection for its two libraries).";
+    row("decoder").fail("failed");
+  }
+})();
+</script>
+</body>
+</html>

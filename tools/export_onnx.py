@@ -26,7 +26,7 @@ OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 
 
 class Encoder(nn.Module):
-    def __init__(self):
+    def __init__(self, L=L, N_PAR=N_PAR):
         super().__init__()
         self.conv = nn.Sequential(nn.Conv1d(1, 128, 7, padding=3), nn.LeakyReLU(0.2),
                                   nn.Conv1d(128, 64, 5, padding=2), nn.LeakyReLU(0.2))
@@ -38,15 +38,16 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self):
+    def __init__(self, L=L, N_PAR=N_PAR):
         super().__init__()
+        self.L = L
         self.dense = nn.Sequential(nn.Linear(N_PAR, 32), nn.ReLU(), nn.Linear(32, 64), nn.ReLU(),
                                    nn.Linear(64, 512), nn.ReLU(), nn.Linear(512, 64 * L), nn.ReLU())
         self.deconv = nn.Sequential(nn.ConvTranspose1d(64, 128, 5, padding=2), nn.LeakyReLU(0.2),
                                     nn.ConvTranspose1d(128, 1, 7, padding=3), nn.LeakyReLU(0.2))
 
     def forward(self, y):
-        return self.deconv(self.dense(y).view(-1, 64, L)).squeeze(1)
+        return self.deconv(self.dense(y).view(-1, 64, self.L)).squeeze(1)
 
 
 def main(ckpt, zenodo):

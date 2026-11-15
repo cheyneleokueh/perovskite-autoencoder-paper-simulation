@@ -11,6 +11,16 @@ The network is an independent PyTorch re-implementation, trained on the authors'
 - **Simulate:** six sliders set the device parameters, and the decoder draws the transient J–V curves at six scan speeds, forward and reverse, in about 30 ms.
 - **Estimate:** pick one of 12 devices from the paper's test set, and the encoder estimates its parameters; the decoder then rebuilds its curves from the estimate.
 
+## Our lab cell: `r08.html`
+
+A second page applies the same method to one real device, the wide-bandgap (1.82 eV) p-i-n cell R08: ITO / PTAA + Me4PACz / perovskite 270 nm / PCBM 55 nm / BCP 5 nm / Ag. Its one measured J–V curve (forward scan, 1 sun) comes from Prof. Fang-Chung Chen's lab (NYCU) and is shared with permission; no other lab data is included. The network was retrained on 3,598 of our own OghmaNano simulations of this cell.
+
+- Sliders for τ, μ, ρ_ion, ETL interface traps, Rs and Rsh redraw the curve, with the live RMS against the measurement.
+- Buttons load the encoder's estimate from the measured curve, the best decoder fit, and a solver fit.
+- Dashed lines show full solver simulations for comparison (ETL-side traps RMS 0.10, HTL-side traps 0.07, the decoder fit re-simulated 0.56 mA/cm²).
+
+The page states its limits: one curve cannot decide between these fits, this network has no HTL-side traps yet, and the decoder's own error (0.67 mA/cm² on average) is larger than the differences between the fits. Files: `model/r08_*.js`, rebuilt by `tools/export_r08.py`.
+
 ## Run it
 
 Open the live page, or download the repository and open `index.html` in a browser. No server or install is needed, but the page loads two libraries (Chart.js and ONNX Runtime Web) from jsDelivr, so it needs an internet connection.
@@ -21,11 +31,14 @@ Both networks start downloading as soon as the page opens, with a progress bar f
 
 | Path | What |
 |---|---|
-| `index.html` | the page |
+| `index.html` | the paper-model page |
+| `r08.html`, `model/r08_*.js` | our lab cell page and its float16 model (9 MB each half) |
+| `style.css` | shared styles |
 | `model/decoder_*.js` | decoder, int8 weights: 24.6 MB as ONNX, 32.8 MB as base64 in 2 script files |
 | `model/encoder_*.js` | encoder, float16 weights: 48.1 MB as ONNX, 64.2 MB as base64 in 3 script files |
 | `model/data.js` | normalisation (from the data set), parameter names and units, the 12 test devices, the test-set check of the export, and file sizes for the progress bars |
-| `tools/export_onnx.py` | rebuilds the `model/` files from a PyTorch checkpoint and the Zenodo data |
+| `tools/export_onnx.py` | rebuilds the paper-model files from a PyTorch checkpoint and the Zenodo data |
+| `tools/export_r08.py` | rebuilds the R08 files from our training run, fits and the measured curve |
 
 The model is stored as script files rather than `.onnx` files because browsers block a page opened from disk from reading other local files. Each file stays under 30 MB.
 
