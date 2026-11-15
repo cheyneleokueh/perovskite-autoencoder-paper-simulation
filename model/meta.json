@@ -1,0 +1,69 @@
+{
+ "source": "Zbinden, Comi, Knapp & Tress, npj Comput. Mater. 12, 7 (2026), doi:10.1038/s41524-025-01875-0; data: Zenodo doi:10.5281/zenodo.15639230 (CC BY 4.0)",
+ "J_min": -78.37697633085047,
+ "J_max": 35.01427988276972,
+ "params": [
+  {
+   "key": "S",
+   "name": "Surface recombination velocity S",
+   "unit": "cm/s",
+   "log10_min": -2.999829282751327,
+   "log10_max": 1.9998774263076489
+  },
+  {
+   "key": "mu",
+   "name": "Perovskite mobility μ",
+   "unit": "cm²/Vs",
+   "log10_min": -1.9997075344435904,
+   "log10_max": 2.999940854031593
+  },
+  {
+   "key": "tau",
+   "name": "SRH lifetime τ",
+   "unit": "ns",
+   "log10_min": 4.516914487056643e-06,
+   "log10_max": 3.9999946672469373
+  },
+  {
+   "key": "mu_TiO2",
+   "name": "TiO₂ electron mobility μ_TiO₂",
+   "unit": "cm²/Vs",
+   "log10_min": -4.6020223677277485,
+   "log10_max": -1.963417680911954e-05
+  },
+  {
+   "key": "mu_C",
+   "name": "Cation mobility μ_C",
+   "unit": "cm²/Vs",
+   "log10_min": -14.999971015611665,
+   "log10_max": -4.000296574551613
+  },
+  {
+   "key": "rho_ion",
+   "name": "Ion density ρ_ion",
+   "unit": "cm⁻³",
+   "log10_min": 14.000172717496753,
+   "log10_max": 19.999870498199016
+  }
+ ],
+ "scan_speeds_V_s": [
+  100,
+  50,
+  5,
+  0.5,
+  0.05,
+  0.005
+ ],
+ "voltage": "0 -> 1.2 -> 0 V in 0.02 V steps, 122 points per speed",
+ "check_export_on_2000_test_devices": {
+  "param_R2": {
+   "S": 0.5170000195503235,
+   "mu": 0.984000027179718,
+   "tau": 0.8669999837875366,
+   "mu_TiO2": 0.5849999785423279,
+   "mu_C": 0.8349999785423279,
+   "rho_ion": 0.9340000152587891
+  },
+  "decoder_MAE_mA_cm2": 0.447
+ }
+}
