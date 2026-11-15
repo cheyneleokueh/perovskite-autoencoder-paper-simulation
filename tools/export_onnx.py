@@ -126,6 +126,7 @@ def pack():
             with open(os.path.join(OUT, f"{name}_{k}.js"), "w") as fh:
                 fh.write(f'window.AE = window.AE || {{}}; (AE.{name} = AE.{name} || [])[{k}] = "{part}";\n')
         lines.append(f"AE.{name}_parts = {len(parts)};")
+        lines.append(f"AE.{name}_bytes = {[len(p) + 60 + len(name) for p in parts]};")  # approximate, for the progress bar
     with open(os.path.join(OUT, "data.js"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
     for f in ("decoder.onnx", "encoder.onnx", "meta.json", "examples.json"):

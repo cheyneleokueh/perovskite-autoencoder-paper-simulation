@@ -38,6 +38,15 @@ select,.btn{font:inherit;padding:6px 8px;border-radius:6px;border:1px solid var(
 .note b{color:var(--ink)}
 footer{margin-top:18px}
 [hidden]{display:none!important}
+#loader{position:fixed;inset:0;z-index:10;display:flex;align-items:center;justify-content:center;padding:16px;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(3px)}
+#loader .box{width:min(420px,100%);background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px;box-shadow:0 8px 30px rgba(0,0,0,.12)}
+#loader h2{font-size:1.1rem;margin:0 0 4px}
+#loader p{margin:0 0 14px;color:var(--muted);font-size:.9rem}
+.bar{height:10px;border-radius:5px;background:var(--accent-soft);overflow:hidden}
+.bar span{display:block;height:100%;width:0;background:var(--accent);border-radius:5px}
+.bar.busy span{width:35%!important;animation:slide 1.1s ease-in-out infinite}
+@keyframes slide{0%{margin-left:-35%}100%{margin-left:100%}}
+#ld-text{display:block;margin-top:8px;font-size:.85rem;color:var(--muted);font-variant-numeric:tabular-nums}
 </style>
 </head>
 <body>
@@ -78,6 +87,15 @@ footer{margin-top:18px}
  <b>Credit.</b> Method, data and parameter ranges: the paper above, doi:<a href="https://doi.org/10.1038/s41524-025-01875-0">10.1038/s41524-025-01875-0</a>; data: Zenodo doi:<a href="https://doi.org/10.5281/zenodo.15639230">10.5281/zenodo.15639230</a>, both CC BY 4.0. This page is an independent re-implementation, not the authors' code.
 </footer>
 </main>
+
+<div id="loader" role="dialog" aria-live="polite" aria-label="Loading">
+ <div class="box">
+  <h2 id="ld-title">Loading the simulator</h2>
+  <p id="ld-sub">The decoder network downloads once (about 33 MB); after that every curve takes milliseconds.</p>
+  <div class="bar" id="ld-bar"><span id="ld-fill"></span></div>
+  <span id="ld-text">Starting…</span>
+ </div>
+</div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
@@ -207,10 +225,54 @@ function addScript(src) {
     document.head.appendChild(s);
   });
 }
+// Loading screen: a real progress bar when served over http(s), where the download can be streamed; opened from
+// disk, files load as scripts, so progress moves per file.
+function showLoader(title, sub) {
+  $("ld-title").textContent = title; $("ld-sub").textContent = sub;
+  $("ld-fill").style.width = "0"; $("ld-bar").classList.remove("busy"); $("ld-text").textContent = "Starting…";
+  $("loader").hidden = false;
+}
+function setProgress(done, total, label) {
+  $("ld-bar").classList.remove("busy");
+  $("ld-fill").style.width = Math.min(100, 100 * done / total).toFixed(1) + "%";
+  $("ld-text").textContent = label || `${(done / 1e6).toFixed(1)} of ${(total / 1e6).toFixed(1)} MB`;
+}
+function setBusy(label) { $("ld-bar").classList.add("busy"); $("ld-text").textContent = label; }
+function hideLoader() { $("loader").hidden = true; }
+
+async function fetchPart(src, onBytes) {
+  const r = await fetch(src);
+  if (!r.ok) throw new Error("missing " + src);
+  const reader = r.body.getReader(), chunks = [];
+  for (;;) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    chunks.push(value); onBytes(value.length);
+  }
+  const text = await new Blob(chunks).text();
+  return text.slice(text.indexOf('= "') + 3, text.lastIndexOf('"'));
+}
+
 async function loadModel(name) {
-  for (let k = 0; k < AE[name + "_parts"]; k++) await addScript(`model/${name}_${k}.js`);
-  const b64 = AE[name].join("");
-  AE[name] = null;
+  const n = AE[name + "_parts"], sizes = AE[name + "_bytes"] || [], total = sizes.reduce((a, b) => a + b, 0) || n;
+  const parts = [];
+  let done = 0;
+  for (let k = 0; k < n; k++) {
+    const src = `model/${name}_${k}.js`;
+    if (location.protocol.startsWith("http")) {
+      parts.push(await fetchPart(src, b => { done += b; setProgress(done, total); }));
+    } else {
+      setProgress(done, total, `File ${k + 1} of ${n}…`);
+      await addScript(src);
+      parts.push(AE[name][k]);
+      done += sizes[k] || 1;
+      setProgress(done, total, `File ${k + 1} of ${n} loaded`);
+    }
+  }
+  setBusy("Preparing the network…");
+  await new Promise(r => setTimeout(r, 30));  // let the bar repaint before the decode below
+  const b64 = parts.join("");
+  if (AE[name]) AE[name] = null;
   const bin = atob(b64), bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return ort.InferenceSession.create(bytes);
@@ -218,8 +280,8 @@ async function loadModel(name) {
 
 async function loadEncoder() {
   if (enc) return;
-  $("status").textContent = "Loading the encoder (48 MB, once)…";
-  enc = await loadModel("encoder");
+  showLoader("Loading the estimator", "The encoder network downloads once (about 64 MB); after that each estimate takes milliseconds.");
+  try { enc = await loadModel("encoder"); } finally { hideLoader(); }
 }
 
 function setTab(t) {
@@ -241,13 +303,16 @@ function setTab(t) {
     examples.forEach((e, i) => { const o = document.createElement("option"); o.value = i; o.textContent = "Test device #" + e.id; $("ex").appendChild(o); });
     $("ex").onchange = () => estimate();
     buildSliders(); buildSpeeds(); makeChart();
-    $("status").textContent = "Loading the decoder (25 MB, once)…";
+    $("status").textContent = "";
     dec = await loadModel("decoder");
+    hideLoader();
     $("t-sim").onclick = () => setTab("sim");
     $("t-est").onclick = () => setTab("est");
     simulate();
   } catch (err) {
-    $("status").textContent = "Could not start: " + err.message + " (the page needs an internet connection for its two libraries).";
+    const msg = "Could not start: " + err.message + " (the page needs an internet connection for its two libraries).";
+    $("status").textContent = msg;
+    $("ld-title").textContent = "Something went wrong"; $("ld-bar").hidden = true; $("ld-text").textContent = msg;
   }
 })();
 </script>
