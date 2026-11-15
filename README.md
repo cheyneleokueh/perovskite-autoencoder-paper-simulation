@@ -11,24 +11,19 @@ The network is an independent PyTorch re-implementation, trained on the authors'
 
 ## Run it
 
-Open the GitHub Pages site, or serve the folder locally (browsers block the model files when the page is opened as a plain file):
-
-```
-python -m http.server 8000
-```
-
-then open http://localhost:8000.
+Download or clone the repository and open `index.html` in a browser. No server or install is needed, but the page loads two libraries (Chart.js and ONNX Runtime Web) from jsDelivr, so it needs an internet connection. It also works on GitHub Pages.
 
 ## Contents
 
 | Path | What |
 |---|---|
 | `index.html` | the page |
-| `model/decoder.onnx` | decoder, int8 weights (24.6 MB) |
-| `model/encoder.onnx` | encoder, float16 weights (48.1 MB), loaded only for the Estimate tab |
-| `model/meta.json` | normalisation (from the data set), parameter names and units, test-set check of the export |
-| `model/examples.json` | 12 devices from the paper's test set |
+| `model/decoder_*.js` | decoder, int8 weights (24.6 MB), base64 in 2 script files |
+| `model/encoder_*.js` | encoder, float16 weights (48.1 MB), base64 in 3 script files, loaded only for the Estimate tab |
+| `model/data.js` | normalisation (from the data set), parameter names and units, test-set check of the export, 12 devices from the paper's test set |
 | `tools/export_onnx.py` | rebuilds the files above from a PyTorch checkpoint and the Zenodo data |
+
+The model is stored as scripts rather than `.onnx` files because browsers block reading local files from a page opened from disk.
 
 ## Model
 

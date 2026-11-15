@@ -4,8 +4,13 @@ Usage: python tools/export_onnx.py <checkpoint_dir> <zenodo_dir>
   checkpoint_dir  holds encoder.pt and decoder.pt (state dicts)
   zenodo_dir      the paper's data set (x_test.npy, y_test.npy, current_df_info.csv, log_param_df_info.csv)
 
-Writes model/encoder.onnx, model/decoder.onnx (int8 weights; encoder float16), model/meta.json and model/examples.json.
+Writes model/encoder.onnx, model/decoder.onnx (int8 weights; encoder float16), model/meta.json and model/examples.json,
+then packs them as script files (model/*.js) so index.html also works opened straight from disk, where browsers block
+fetch(). Only the .js files are kept.
+
+Usage (pack only, from existing .onnx/.json files): python tools/export_onnx.py pack
 """
+import base64
 import csv
 import json
 import os
@@ -103,9 +108,34 @@ def main(ckpt, zenodo):
         "decoder_MAE_mA_cm2": round(float(np.abs(xp - x[sub]).mean() * (meta["J_max"] - meta["J_min"])), 3)}
     json.dump(meta, open(os.path.join(OUT, "meta.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     print(json.dumps(meta["check_export_on_2000_test_devices"]))
+    pack()
+
+
+CHUNK = 30_000_000  # base64 characters per script file, under GitHub's 50 MB warning
+
+
+def pack():
+    """model/*.onnx and *.json -> script files that set window.AE (no fetch needed)."""
+    lines = ["window.AE = window.AE || {};"]
+    for key, name in (("meta", "meta.json"), ("examples", "examples.json")):
+        lines.append(f"AE.{key} = {open(os.path.join(OUT, name), encoding='utf-8').read().strip()};")
+    for name in ("decoder", "encoder"):
+        b64 = base64.b64encode(open(os.path.join(OUT, f"{name}.onnx"), "rb").read()).decode()
+        parts = [b64[i:i + CHUNK] for i in range(0, len(b64), CHUNK)]
+        for k, part in enumerate(parts):
+            with open(os.path.join(OUT, f"{name}_{k}.js"), "w") as fh:
+                fh.write(f'window.AE = window.AE || {{}}; (AE.{name} = AE.{name} || [])[{k}] = "{part}";\n')
+        lines.append(f"AE.{name}_parts = {len(parts)};")
+    with open(os.path.join(OUT, "data.js"), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+    for f in ("decoder.onnx", "encoder.onnx", "meta.json", "examples.json"):
+        os.remove(os.path.join(OUT, f))
     for f in sorted(os.listdir(OUT)):
         print(f, round(os.path.getsize(os.path.join(OUT, f)) / 1e6, 1), "MB")
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:3])
+    if sys.argv[1:2] == ["pack"]:
+        pack()
+    else:
+        main(*sys.argv[1:3])

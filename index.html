@@ -81,6 +81,7 @@ footer{margin-top:18px}
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+<script src="model/data.js"></script>
 <script>
 "use strict";
 ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
@@ -197,10 +198,28 @@ async function estimate() {
   $("status").textContent = `Encoder: ${(t1 - t0).toFixed(0)} ms. Points: the test device's simulated curves. Lines: decoder output from the estimate.`;
 }
 
+// The model files are base64 inside plain scripts (model/<name>_<k>.js), so the page also works opened from disk,
+// where browsers block fetch().
+function addScript(src) {
+  return new Promise((ok, fail) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = ok; s.onerror = () => fail(new Error("missing " + src));
+    document.head.appendChild(s);
+  });
+}
+async function loadModel(name) {
+  for (let k = 0; k < AE[name + "_parts"]; k++) await addScript(`model/${name}_${k}.js`);
+  const b64 = AE[name].join("");
+  AE[name] = null;
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return ort.InferenceSession.create(bytes);
+}
+
 async function loadEncoder() {
   if (enc) return;
   $("status").textContent = "Loading the encoder (48 MB, once)…";
-  enc = await ort.InferenceSession.create("model/encoder.onnx");
+  enc = await loadModel("encoder");
 }
 
 function setTab(t) {
@@ -215,7 +234,7 @@ function setTab(t) {
 
 (async () => {
   try {
-    [meta, examples] = await Promise.all([fetch("model/meta.json").then(r => r.json()), fetch("model/examples.json").then(r => r.json())]);
+    meta = AE.meta; examples = AE.examples;
     const c = meta.check_export_on_2000_test_devices;
     if (c) $("check").textContent = "Test-set check of this exported model: parameter R² " +
       Object.entries(c.param_R2).map(([k, v]) => k + " " + v.toFixed(2)).join(", ") + "; mean curve error " + c.decoder_MAE_mA_cm2 + " mA/cm².";
@@ -223,12 +242,12 @@ function setTab(t) {
     $("ex").onchange = () => estimate();
     buildSliders(); buildSpeeds(); makeChart();
     $("status").textContent = "Loading the decoder (25 MB, once)…";
-    dec = await ort.InferenceSession.create("model/decoder.onnx");
+    dec = await loadModel("decoder");
     $("t-sim").onclick = () => setTab("sim");
     $("t-est").onclick = () => setTab("est");
     simulate();
   } catch (err) {
-    $("status").textContent = "Could not start: " + err.message + (location.protocol === "file:" ? " (open this page through a web server, not as a file)" : "");
+    $("status").textContent = "Could not start: " + err.message + " (the page needs an internet connection for its two libraries).";
   }
 })();
 </script>
